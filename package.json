@@ -19,10 +19,12 @@
   "homepage": "https://github.com/TilinC/puppy-paw-slack-bot#readme",
   "dependencies": {
     "@slack/client": "^3.13.0",
+    "@slack/interactive-messages": "^0.1.2",
     "body-parser": "^1.18.1",
     "dotenv": "^4.0.0",
     "express": "^4.15.4",
-    "mongodb": "^2.2.31"
+    "mongodb": "^2.2.31",
+    "pluralize": "^7.0.0"
   },
   "devDependencies": {
     "nodemon": "^1.12.0"
