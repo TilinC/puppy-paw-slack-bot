@@ -5,17 +5,15 @@ const pluralize = require('pluralize');
 const mongoClient = require('mongodb').MongoClient;
 const webClient = require('@slack/client').WebClient;
 
-const app = express();
-
-const port = process.env.PORT || 3000;
 if (process.env.NODE_ENV !== 'production') {
     require('dotenv').load();
 }
 
-var db;
+const app = express();
+const port = process.env.PORT || 3000;
 
+let db;
 let mongoDbUri = process.env.MONGODB_URI;
-
 mongoClient.connect(mongoDbUri, (err, database) => {
     if (err) return console.log(err);
     db = database;
@@ -24,14 +22,12 @@ mongoClient.connect(mongoDbUri, (err, database) => {
     })
 });
 
-var token = process.env.SLACK_API_TOKEN || '';
+const token = process.env.SLACK_API_TOKEN || '';
+const web = new webClient(token);
 
-var web = new webClient(token);
-
-// let jsonParser = bodyParser.json();
+app.use(express.static('public'));
 app.use(bodyParser.json());
-// let formParser = bodyParser.urlencoded({extended: true});
-app.use(bodyParser.urlencoded({extended: true}));
+app.use(bodyParser.urlencoded({extended: true, type: 'application/x-www-form-urlencoded'}));
 
 app.get('/', (req, res) => {
     res.sendFile(__dirname + '/index.html')
@@ -43,13 +39,6 @@ app.post('/puppypaws', (request, response) => {
     if (mentionedUser) {
         let receiverId = mentionedUser[0].substring(2);
         let receiverName = text.match(/\|([a-z])+/g)[0].substring(1);
-        console.log('request: ');
-        for (var key in request.body) {
-            var value = request.body[key];
-
-            console.log(key + '=', value);
-        }
-
         var interactiveMessage = {
             "attachments": [
                 {
@@ -57,7 +46,7 @@ app.post('/puppypaws', (request, response) => {
                     "fallback": "oops, norbert is nap now",
                     "callback_id": "send_or_stats",
                     "color": "good",
-                    "attachment_type": "primary",
+                    "attachment_type": "default",
                     "actions": [
                         {
                             "name": "send",
@@ -69,14 +58,39 @@ app.post('/puppypaws', (request, response) => {
                             "name": "stats",
                             "text": "See their number of puppy paws",
                             "type": "button",
-                            "value": "stats"
+                            "value": receiverId
                         }
                     ]
                 }
             ]
         };
         response.json(interactiveMessage);
-        // sendPaw(request.body, receiverId);
+    } else if (text.includes('leaderboard')) {
+        var interactiveMessage = {
+            "attachments": [
+                {
+                    "fallback": "oops, norbert is nap now",
+                    "callback_id": "leaderboard",
+                    "color": "#3AA3E3",
+                    "attachment_type": "default",
+                    "actions": [
+                        {
+                            "name": "top_ten",
+                            "text": "Top ten paw collectors",
+                            "type": "button",
+                            "value": "top_ten"
+                        },
+                        {
+                            "name": "all",
+                            "text": "All paw collectors",
+                            "type": "button",
+                            "value": "all"
+                        }
+                    ]
+                }
+            ]
+        };
+        response.json(interactiveMessage);
     } else {
         web.chat.postEphemeral(
             request.body.channel_id,
@@ -94,96 +108,120 @@ app.post('/puppypaws', (request, response) => {
 
 app.post('/slack/actions', (request, response) => {
     let payload = JSON.parse(request.body.payload);
-
-    if (payload.actions[0].name === "send") {
-        let pawRecipient = payload.actions[0].value;
-        let escapedPawRecipient = '<@' + pawRecipient + '>';
-
-        let pawSender = payload.user.id;
-        let escapedPawSender = '<@' + pawSender + '>';
-
-        db.collection('paws').findOneAndUpdate(
-            {slackUserId: pawRecipient},
-            {$inc: {pawsReceived: 1}},
-            {upsert: true, returnOriginal: false},
-            (receiverError, receiverDoc) => {
-                if (receiverError) {
-                    response.send("Norbert is sorry, he couldn't send a puppy paw to your friend. Please try again later.");
-                } else {
-                    let receiverPawsReceivedCount = receiverDoc.value.pawsReceived;
-                    let message = 'High-paw, '+ escapedPawRecipient + '! ' + escapedPawSender + ' has sent you a puppy paw! You now have ' +
-                        receiverPawsReceivedCount + ' ' + pluralize('paw', receiverPawsReceivedCount) + '!';
-
-                    let highPawMessage = {
-                        "response_type": "in_channel",
-                        "attachments": [
-                            {
-                                "fallback": "Norbert says 'High-paw, hooman frend!'",
-                                "color": "#36a64f",
-                                "pretext": message,
-                                "image_url": "https://i.imgur.com/Ii0ALYG.jpg"
-                            }
-                        ]
-                    };
-
-                    db.collection('paws').findOneAndUpdate(
-                        {slackUserId: pawSender},
-                        {$inc: {pawsSent: 1}},
-                        {upsert: true, returnNewDocument: true},
-                        (senderError, senderDoc) => {
-                            if (senderError) console.log(senderError);
-                        }
-                    );
-
-                    response.send(highPawMessage);
-                }
-            }
-        );
+    switch (payload.actions[0].name) {
+        case "send":
+            sendPuppyPaw(payload, response);
+            break;
+        case "stats":
+            showPuppyPawStats(payload, response);
+            break;
+        case "top_ten":
+            showTopTen(payload, response);
+            break;
+        case "all":
+            showAll(payload, response);
+            break;
+        default:
+            response.send("Oops, Norbert got confused.  Try again later");
+            break;
     }
+
 });
 
-function sendPaw(body, receiverId) {
-    let senderId = body.user_id;
-    let senderName = body.user_name;
-    let escapedSenderId = '<@' + senderId + '>';
-    let channelId = body.channel_id;
-    let escapedReceiverId = '<@' + receiverId + '>';
+function sendPuppyPaw(payload, response) {
+    let pawRecipient = payload.actions[0].value;
+    let escapedPawRecipient = '<@' + pawRecipient + '>';
+
+    let pawSender = payload.user.id;
+    let pawSenderName = payload.user.name;
+    let escapedPawSender = '<@' + pawSender + '>';
+
     db.collection('paws').findOneAndUpdate(
-        {slackUserId: receiverId},
+        {slackUserId: pawRecipient},
         {$inc: {pawsReceived: 1}},
         {upsert: true, returnOriginal: false},
         (receiverError, receiverDoc) => {
             if (receiverError) {
-                web.chat.postEphemeral(
-                    channelId,
-                    "We're sorry, we couldn't send a puppy paw.  Please try again later",
-                    senderId,
-                    function (err, res) {
-                        if (err) {
-                            console.log('Error:', err);
-                        }
-                    }
-                )
+                response.send("Norbert is sorry, he couldn't send a puppy paw to your friend. Please try again later.");
             } else {
-                let receiverPawsReceivedCount = receiverDoc.value.pawsReceived;
-                let message = 'High-paw, '+ escapedReceiverId + '! ' + escapedSenderId + ' has sent you a puppy paw! You now have ' +
-                    receiverPawsReceivedCount + ' ' + pluralize('paw', receiverPawsReceivedCount) + '!';
-                web.chat.postMessage(channelId,
-                    message,
-                    senderId,
-                    function (err, res) {
-                        if (err) console.log('Error:', err);
-                    });
-
                 db.collection('paws').findOneAndUpdate(
-                    {slackUserId: senderId},
+                    {slackUserId: pawSender},
                     {$inc: {pawsSent: 1}},
                     {upsert: true, returnNewDocument: true},
                     (senderError, senderDoc) => {
                         if (senderError) console.log(senderError);
                     }
                 );
+
+                let receiverPawsReceivedCount = receiverDoc.value.pawsReceived;
+                let message = "High-paw, " + escapedPawRecipient + "! " + pawSenderName + " has sent you a puppy paw! You now have " +
+                    receiverPawsReceivedCount + " " + pluralize("paw", receiverPawsReceivedCount) + "!";
+                let options = {
+                    "attachments": [
+                        {
+                            "fallback": "Norbert says 'High-paw, hooman frend!'",
+                            "color": "#36a64f",
+                            "image_url": "https://puppy-paw-slack-bot.herokuapp.com/images/norbertHighPaw.jpg"
+                        }
+                    ]
+                };
+
+                web.chat.postMessage(payload.channel.id,
+                    message,
+                    options,
+                    function (err, res) {
+                        if (err) console.log('Error:', err);
+                    });
             }
+            response.end();
         }
     );
+}
+
+function showPuppyPawStats(payload, response) {
+    let pawRecipient = payload.actions[0].value;
+    let escapedPawRecipient = '<@' + pawRecipient + '>';
+    db.collection('paws').findOne({slackUserId: pawRecipient}, (error, document) => {
+            if (error) {
+                response.send("Norbert is sorry, he couldn't fetch stats for you. Please try again later.");
+            }
+            else if (document && document.pawsReceived) {
+                response.send(escapedPawRecipient + ' has ' + document.pawsReceived + ' puppy ' + pluralize("paw", document.pawsReceived) + '!');
+            } else response.send(escapedPawRecipient + ' has no puppy paws yet.');
+        }
+    );
+}
+
+function showTopTen(payload, response) {
+    let query = {pawsReceived: {$exists: true}};
+    let projection = {"_id": 1, "slackUserId": 1, "pawsReceived": 1};
+    var message = 'Top ten users by number of paws received: ';
+    db.collection('paws').find(query, projection).sort({pawsReceived: -1}).limit(10).toArray(function (err, docs) {
+        if (err) response.send("Norbert is sorry, he couldn't fetch stats for you. Please try again later.");
+        if (docs) {
+            docs.forEach(document => {
+                message = message + '\n ' + '<@' + document.slackUserId + '>: ' + document.pawsReceived;
+            });
+            response.send(message);
+        }
+    });
+}
+
+function showAll(payload, response) {
+    let query = {slackUserId: {$exists: true}};
+    let projection = {"_id": 1, "slackUserId": 1, "pawsReceived": 1, "pawsSent": 1};
+    var message = 'All paw collectors: ';
+    db.collection('paws').find(query, projection).sort({pawsReceived: -1}).toArray(function (err, docs) {
+        if (err) response.send("Norbert is sorry, he couldn't fetch stats for you. Please try again later.");
+        if (docs) {
+            docs.forEach(document => {
+                let pawsReceived = document.pawsReceived || 0;
+                let pawsSent = document.pawsSent || 0;
+                message = message + '\n ' + '<@' + document.slackUserId + '>: '
+                    + pawsReceived + ' ' + pluralize("paw", pawsReceived) + ' received, '
+                + pawsSent + ' ' + pluralize("paw", pawsSent) + ' sent';
+            });
+            response.send(message);
+        }
+    });
 }
