@@ -1,6 +1,7 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const pluralize = require('pluralize');
+const fs = require('fs');
 
 const mongoClient = require('mongodb').MongoClient;
 const webClient = require('@slack/client').WebClient;
@@ -35,14 +36,14 @@ app.get('/', (req, res) => {
 
 app.post('/puppypaws', (request, response) => {
     let text = request.body.text;
-    let mentionedUser = text.match(/<@(.*?)\w+/g);
+    let mentionedUser = text.match(/@(.*?)\w+/g);
+    console.log('Body text:' + text + ', Mentioned user: ' + mentionedUser);
     if (mentionedUser) {
-        let receiverId = mentionedUser[0].substring(2);
-        let receiverName = text.match(/\|([a-z])+/g)[0].substring(1);
+        let receiverId = mentionedUser[0].substring(1);
         var interactiveMessage = {
             "attachments": [
                 {
-                    "text": "u mentioned a hooman! wat do u want to do for " + receiverName + "?",
+                    "text": "u mentioned a hooman! wat do u want to do for <" + mentionedUser + ">?",
                     "fallback": "oops, norbert is nap now",
                     "callback_id": "send_or_stats",
                     "color": "good",
@@ -69,7 +70,7 @@ app.post('/puppypaws', (request, response) => {
         var interactiveMessage = {
             "attachments": [
                 {
-                    "fallback": "oops, norbert is nap now",
+                    "fallback": "view leaderboard",
                     "callback_id": "leaderboard",
                     "color": "#3AA3E3",
                     "attachment_type": "default",
@@ -94,7 +95,7 @@ app.post('/puppypaws', (request, response) => {
     } else {
         web.chat.postEphemeral(
             request.body.channel_id,
-            'Oops, you must mention someone to send them a puppy paw',
+            'Oops, you must mention someone to send them a puppy paw or type "leaderboard"',
             request.body.user_id,
             function (err, res) {
                 if (err) {
@@ -156,12 +157,15 @@ function sendPuppyPaw(payload, response) {
                 let receiverPawsReceivedCount = receiverDoc.value.pawsReceived;
                 let message = "High-paw, " + escapedPawRecipient + "! " + pawSenderName + " has sent you a puppy paw! You now have " +
                     receiverPawsReceivedCount + " " + pluralize("paw", receiverPawsReceivedCount) + "!";
+                let images = fs.readdirSync('./public/images');
+                let randomInteger = Math.floor(Math.random() * images.length);
+                let randomImageUrl = "https://puppy-paw-slack-bot.herokuapp.com/images/" + images[randomInteger];
                 let options = {
                     "attachments": [
                         {
                             "fallback": "Norbert says 'High-paw, hooman frend!'",
                             "color": "#36a64f",
-                            "image_url": "https://puppy-paw-slack-bot.herokuapp.com/images/norbertHighPaw.jpg"
+                            "image_url": randomImageUrl
                         }
                     ]
                 };

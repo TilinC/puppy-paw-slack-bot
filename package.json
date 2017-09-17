@@ -23,6 +23,7 @@
     "body-parser": "^1.18.1",
     "dotenv": "^4.0.0",
     "express": "^4.15.4",
+    "fs": "0.0.1-security",
     "mongodb": "^2.2.31",
     "pluralize": "^7.0.0",
     "querystring": "^0.2.0"
